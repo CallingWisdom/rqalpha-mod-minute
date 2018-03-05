@@ -17,12 +17,14 @@ import db
 rq2gm = {'.XSHE': 'SZSE.', '.XSHG': 'SHSE.'}
 
 class MinuteDataSource(BaseDataSource):
+    # # TODO BaseDataSource is better to set data fields as class fields
+    _cache = {}  # key is order_book_id,value is pandas dataframe
+    _cache_size = 480  # should be larger than bar_count
+    _cached_dates = {}  # key is order_book_id
+
     def __init__(self, path):
         super(MinuteDataSource, self).__init__(path)
-        self._cache = {}
-        self._cache_size = 480 # should be larger than bar_count
-        self._cached_dates = {}
-        self.trading_dates_mixin = TradingDatesMixin(self.get_trading_calendar()) # TODO class field ?
+        self.trading_dates_mixin = TradingDatesMixin(self.get_trading_calendar())
 
     def _get_period_cache(self,order_book_id,start_dt,end_dt):
         df = self._cache[order_book_id]
@@ -57,7 +59,7 @@ class MinuteDataSource(BaseDataSource):
                 self._cache_period_bars(instrument, start_dt=start_dt,end_dt=end_dt)
             df = self._get_period_cache(order_book_id,start_dt,dt)
             dtp = self.trading_dates_mixin.get_previous_trading_date(dtp, 1).to_datetime()
-            if dtp < instrument.listed_date: # TODO ensure escape from this loop while data is not avaliable
+            if dtp.date() < self.available_data_range(frequency)[0] or dtp < instrument.listed_date:
                 break
 
     def _cache_period_bars(self,instrument,start_dt,end_dt,frequency='1m',fields=[],adjust_type = 'pre', adjust_orig = None):
@@ -86,8 +88,8 @@ class MinuteDataSource(BaseDataSource):
             self._cached_dates[order_book_id] = trading_dates
 
     def _sort_cache(self,order_book_id):
-        # if order_book_id not in self._cache:
-        #     return
+        if not len(self._cache[order_book_id]):
+            return
         self._cache[order_book_id] = self._cache[order_book_id].sort_values(by='datetime', axis=0, ascending=True, inplace=False, kind='quicksort', na_position='last')
         self._cached_dates[order_book_id].sort()
 
@@ -102,7 +104,7 @@ class MinuteDataSource(BaseDataSource):
     def get_bar(self, instrument, dt, frequency,fields=[],adjust_type = 'none',adjust_orig = None):
         # TODO return adjusted bars, added field 'limit_up', 'limit_down'
         if frequency == '1d':
-            return super(MinuteDataSource, self).get_bar(instrument, dt, frequency)
+            return super(MinuteDataSource, self).get_bar(instrument, dt, frequency)#the returned type is numy.void
         if frequency != '1m':
             raise NotImplementedError
 
@@ -132,10 +134,14 @@ class MinuteDataSource(BaseDataSource):
         self._cache_count_bars(instrument=instrument,dt=dt,bar_count=bar_count)
         self._sort_cache(instrument.order_book_id)
         df = self._cache[instrument.order_book_id]
+        if not len(df):
+            return df
         df = df[df['datetime']<= convert_dt_to_int(dt)]
         if len(df) > bar_count:
             df = df[-bar_count:]
         return df
 
     def available_data_range(self, frequency):
+        if frequency != '1m':
+            return super(MinuteDataSource, self).available_data_range(frequency)
         return date(2017, 5, 1), date.today() - relativedelta(days=1)
